@@ -103,7 +103,7 @@ local LOOT_NAMES = {
 if getgenv().CrimHubStop then pcall(getgenv().CrimHubStop) end
 local running = true
 local pg = LP:WaitForChild("PlayerGui")
-for _, name in ipairs({"CrimHubV34","CrimHubV35","CrimHubV36","CrimHubV37"}) do
+for _, name in ipairs({"CrimHubV34","CrimHubV35","CrimHubV36","CrimHubV37","CrimHubV38"}) do
     if pg:FindFirstChild(name) then pg[name]:Destroy() end
 end
 for _, v in ipairs(Workspace:GetDescendants()) do
@@ -111,7 +111,7 @@ for _, v in ipairs(Workspace:GetDescendants()) do
 end
 
 local sg = Instance.new("ScreenGui")
-sg.Name = "CrimHubV37"
+sg.Name = "CrimHubV38"
 sg.ResetOnSpawn = false
 sg.Parent = pg
 
@@ -225,21 +225,29 @@ local function setLoot(on)
         task.spawn(scanLoot)
         lootConn = Workspace.DescendantAdded:Connect(function(d)
             if not enabled.Loot then return end
-            task.defer(function()
-                if d and d.Parent then
-                    local isL, isSafe = isLoot(d)
-                    if isL then pcall(markLoot, d, isSafe) end
-                end
-            end)
-            task.delay(0.8, function()
+            task.delay(0.25, function()
                 if enabled.Loot and d and d.Parent then
                     local isL, isSafe = isLoot(d)
                     if isL then pcall(markLoot, d, isSafe) end
                 end
             end)
         end)
-        -- Reconcile NPC ESP continuously: supports nested folders, late spawns,
--- and StreamingEnabled. The parent-folder ancestry selects the ESP type.
+        task.spawn(function()
+            while running and lootRetryRunning and enabled.Loot do
+                task.wait(2)
+                if running and lootRetryRunning and enabled.Loot then pcall(scanLoot) end
+            end
+        end)
+    else
+        lootRetryRunning = false
+        for obj, rec in pairs(lootMarks) do
+            if rec.hl then rec.hl:Destroy() end
+            if rec.bb then rec.bb:Destroy() end
+            lootMarks[obj] = nil
+        end
+    end
+end
+
 local function getNPCModel(inst)
     local node = inst
     while node and node ~= Workspace do
@@ -255,7 +263,7 @@ end
 local function getNPCType(model)
     local node = model.Parent
     while node and node ~= Workspace do
-        local key = string.lower((node.Name:gsub("[%s_%-]", "")))
+        local key = string.lower(node.Name:gsub("[%s_%-]", ""))
         for kind, aliases in pairs(FOLDER_ALIASES) do
             if aliases[key] then return kind end
         end
@@ -265,6 +273,7 @@ local function getNPCType(model)
 end
 
 local function scanNPCs()
+    if not running then return end
     for _, inst in ipairs(Workspace:GetDescendants()) do
         if not running then return end
         local model = getNPCModel(inst)
@@ -291,7 +300,7 @@ end)
 
 Workspace.DescendantAdded:Connect(function(inst)
     if not running then return end
-    task.delay(0.25, function()
+    task.delay(0.3, function()
         if not running or not inst.Parent then return end
         local model = getNPCModel(inst)
         if not model then return end
@@ -300,6 +309,30 @@ Workspace.DescendantAdded:Connect(function(inst)
     end)
 end)
 
+local function clearAll()
+    lootRetryRunning = false
+    if lootConn then lootConn:Disconnect(); lootConn = nil end
+    for obj, rec in pairs(active) do
+        if rec.hl then rec.hl:Destroy() end
+        active[obj] = nil
+    end
+    for obj, rec in pairs(lootMarks) do
+        if rec.hl then rec.hl:Destroy() end
+        if rec.bb then rec.bb:Destroy() end
+        lootMarks[obj] = nil
+    end
+end
+
+if type(getgenv) == "function" then
+    getgenv().CrimHubStop = function()
+        running = false
+        pcall(clearAll)
+        local playerGui = LP:FindFirstChildOfClass("PlayerGui")
+        if playerGui and playerGui:FindFirstChild("CrimHubV38") then
+            playerGui.CrimHubV38:Destroy()
+        end
+    end
+end
 
 local flyConnection = nil
 local flyBodyVel = nil
@@ -752,4 +785,4 @@ UIS.InputBegan:Connect(function(input, gpe)
     if input.KeyCode == Enum.KeyCode.V then unlocked = not unlocked end
 end)
 
-print("🚔 Criminal Hub v37 loaded (English default, Mobile Fly, improved Loot ESP)")
+print("🚔 Criminal Hub v38 loaded (ESP scanner and UI initialization fixed)")
