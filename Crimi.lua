@@ -1,5 +1,5 @@
 -- ========================================================
--- 🥷 CRIMINAL HUB v37 (by sega1games12-alt)
+-- 🥷 CRIMINAL HUB v38 + FPS Boost + ESP Optimized (by sega1games12-alt)
 -- ========================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -93,6 +93,27 @@ local FOLDER_ALIASES = {
 local enabled = { Loot = false, Police = false, Guard = false, Civilian = false, Fly = false, NoClip = false }
 local active = {}; local lootMarks = {}  
 
+-- ========================================================
+-- ⚙️ KONFIGURASI PERFORMA (FPS Boost & optimasi ESP)
+-- ========================================================
+local PERF = {
+    FPSBoost = true,                -- true = FPS Boost otomatis ON saat script dijalankan
+    DisablePostEffects = true,
+    DisableParticles = true,
+    DisableTrailsAndBeams = true,
+    DisableCastShadows = true,
+    DisableTerrainDecorations = true,
+    BatchSize = 150,
+    BatchDelay = 0.03,
+
+    ESPMaxDistance = 1500,          -- studs; ESP di luar jarak ini disembunyikan
+    ESPMaxHighlights = 31,          -- Roblox hanya merender maks. 31 Highlight sekaligus
+    ESPMaxLabels = 40,              -- batas label teks (BillboardGui) yang tampil
+    ESPUpdateInterval = 0.4,        -- detik, interval update visibilitas/validasi
+    NPCRescanInterval = 5,          -- detik, scan ulang NPC (cadangan untuk streaming)
+    LootRescanInterval = 6,         -- detik, scan ulang loot (cadangan untuk streaming)
+}
+
 local LOOT_NAMES = {
     ["CashBag"] = true, ["GoldBar"] = true, ["DiamondNecklace"] = true, ["Handbag"] = true,
     ["SeizedCash"] = true, ["TaserItem"] = true, ["CashBox"] = true, ["PoliceRadio"] = true,
@@ -114,6 +135,81 @@ local sg = Instance.new("ScreenGui")
 sg.Name = "CrimHubV38"
 sg.ResetOnSpawn = false
 sg.Parent = pg
+
+-- ========================================================
+-- 🚀 FPS BOOST (otomatis ON, bisa di-toggle dari menu Settings)
+-- ========================================================
+local Lighting = game:GetService("Lighting")
+local connections = {}
+local fpsConns = {}
+local fpsOn = false
+local fpsToken = 0
+local fpsOrig = setmetatable({}, { __mode = "k" })  -- instance -> true (dulu aktif, untuk restore)
+local fpsTerrainOrig = nil
+
+local function fpsOptimize(inst)
+    if PERF.DisablePostEffects and inst:IsA("PostEffect") then
+        if inst.Enabled then fpsOrig[inst] = true; inst.Enabled = false end
+    elseif PERF.DisableParticles and (inst:IsA("ParticleEmitter") or inst:IsA("Fire") or inst:IsA("Smoke") or inst:IsA("Sparkles")) then
+        if inst.Enabled then fpsOrig[inst] = true; inst.Enabled = false end
+    elseif PERF.DisableTrailsAndBeams and (inst:IsA("Trail") or inst:IsA("Beam")) then
+        if inst.Enabled then fpsOrig[inst] = true; inst.Enabled = false end
+    elseif PERF.DisableCastShadows and inst:IsA("BasePart") then
+        if inst.CastShadow then fpsOrig[inst] = true; inst.CastShadow = false end
+    end
+end
+
+local function setFPSBoost(on)
+    on = on and true or false
+    if on == fpsOn then return end
+    fpsOn = on
+    fpsToken += 1
+    local token = fpsToken
+    for _, c in ipairs(fpsConns) do pcall(function() c:Disconnect() end) end
+    table.clear(fpsConns)
+
+    if on then
+        if PERF.DisableTerrainDecorations then
+            local terrain = Workspace:FindFirstChildOfClass("Terrain")
+            if terrain then
+                pcall(function()
+                    if fpsTerrainOrig == nil then fpsTerrainOrig = terrain.Decoration end
+                    terrain.Decoration = false
+                end)
+            end
+        end
+        if PERF.DisablePostEffects then
+            for _, e in ipairs(Lighting:GetChildren()) do pcall(fpsOptimize, e) end
+            table.insert(fpsConns, Lighting.ChildAdded:Connect(function(e) pcall(fpsOptimize, e) end))
+        end
+        -- objek baru langsung dioptimasi
+        table.insert(fpsConns, Workspace.DescendantAdded:Connect(function(inst) pcall(fpsOptimize, inst) end))
+        -- objek yang sudah ada diproses bertahap supaya tidak lag
+        task.spawn(function()
+            local list = Workspace:GetDescendants()
+            for i, inst in ipairs(list) do
+                if token ~= fpsToken or not running then return end
+                pcall(fpsOptimize, inst)
+                if i % PERF.BatchSize == 0 then task.wait(PERF.BatchDelay) end
+            end
+        end)
+    else
+        -- kembalikan ke kondisi awal
+        for inst in pairs(fpsOrig) do
+            if inst.Parent then
+                pcall(function()
+                    if inst:IsA("BasePart") then inst.CastShadow = true else inst.Enabled = true end
+                end)
+            end
+            fpsOrig[inst] = nil
+        end
+        if fpsTerrainOrig ~= nil then
+            local terrain = Workspace:FindFirstChildOfClass("Terrain")
+            if terrain then pcall(function() terrain.Decoration = fpsTerrainOrig end) end
+            fpsTerrainOrig = nil
+        end
+    end
+end
 
 local function addHL(obj, kind)
     local hl = obj:FindFirstChild("CrimESP")
@@ -210,11 +306,14 @@ local function scanLoot()
     local descendants = Workspace:GetDescendants()
     for i, d in ipairs(descendants) do
         if not enabled.Loot then break end
-        local isL, isSafe = isLoot(d)
-        if isL then
-            pcall(markLoot, d, isSafe)
+        local rec = lootMarks[d]
+        if not (rec and rec.hl and rec.hl.Parent) then
+            local isL, isSafe = isLoot(d)
+            if isL then
+                pcall(markLoot, d, isSafe)
+            end
         end
-        if i % 150 == 0 then task.wait() end
+        if i % 300 == 0 then task.wait() end
     end
 end
 
@@ -225,6 +324,7 @@ local function setLoot(on)
         task.spawn(scanLoot)
         lootConn = Workspace.DescendantAdded:Connect(function(d)
             if not enabled.Loot then return end
+            if not isLoot(d) then return end
             task.delay(0.25, function()
                 if enabled.Loot and d and d.Parent then
                     local isL, isSafe = isLoot(d)
@@ -234,7 +334,7 @@ local function setLoot(on)
         end)
         task.spawn(function()
             while running and lootRetryRunning and enabled.Loot do
-                task.wait(2)
+                task.wait(PERF.LootRescanInterval)
                 if running and lootRetryRunning and enabled.Loot then pcall(scanLoot) end
             end
         end)
@@ -272,42 +372,104 @@ local function getNPCType(model)
     return nil
 end
 
+local npcScanDue = true
+
+local function trackNPC(model)
+    local kind = getNPCType(model)
+    if kind and enabled[kind] then pcall(addHL, model, kind) end
+end
+
+-- Scan penuh hanya mencari Humanoid (jauh lebih ringan daripada mengecek semua descendant)
 local function scanNPCs()
     if not running then return end
+    if not (enabled.Police or enabled.Guard or enabled.Civilian) then return end
+    local n = 0
     for _, inst in ipairs(Workspace:GetDescendants()) do
         if not running then return end
-        local model = getNPCModel(inst)
-        if model then
-            local kind = getNPCType(model)
-            if kind and enabled[kind] then pcall(addHL, model, kind) end
+        if inst:IsA("Humanoid") then
+            local model = inst.Parent
+            if model and model:IsA("Model") and not active[model] then
+                trackNPC(model)
+            end
         end
+        n += 1
+        if n % 400 == 0 then task.wait() end
     end
+end
+
+-- Validasi murah: hanya memeriksa entri yang sudah ada (bukan seluruh Workspace)
+local function validateESP()
     for model, rec in pairs(active) do
         if not model.Parent or not model:IsDescendantOf(Workspace)
+            or not rec.hl or not rec.hl.Parent
             or not enabled[rec.kind] or getNPCType(model) ~= rec.kind then
             if rec.hl then rec.hl:Destroy() end
             active[model] = nil
         end
     end
+    for obj, rec in pairs(lootMarks) do
+        if not obj.Parent or not obj:IsDescendantOf(Workspace) then
+            if rec.hl then rec.hl:Destroy() end
+            if rec.bb then rec.bb:Destroy() end  -- label lama tidak lagi menumpuk
+            lootMarks[obj] = nil
+        end
+    end
+end
+
+-- Culling: hanya ESP terdekat dalam jarak maks. yang ditampilkan (batas render Highlight = 31)
+local espList = {}
+local function updateESPVisibility()
+    local cam = Workspace.CurrentCamera
+    if not cam then return end
+    local camPos = cam.CFrame.Position
+    table.clear(espList)
+    for obj, rec in pairs(active) do
+        if rec.hl and rec.hl.Parent then
+            espList[#espList + 1] = { hl = rec.hl, dist = (obj:GetPivot().Position - camPos).Magnitude }
+        end
+    end
+    for obj, rec in pairs(lootMarks) do
+        if rec.hl and rec.hl.Parent then
+            espList[#espList + 1] = { hl = rec.hl, bb = rec.bb, dist = (obj:GetPivot().Position - camPos).Magnitude }
+        end
+    end
+    table.sort(espList, function(a, b) return a.dist < b.dist end)
+    for i, e in ipairs(espList) do
+        local inRange = e.dist <= PERF.ESPMaxDistance
+        local showHL = inRange and i <= PERF.ESPMaxHighlights
+        if e.hl.Enabled ~= showHL then e.hl.Enabled = showHL end
+        if e.bb then
+            local showBB = inRange and i <= PERF.ESPMaxLabels
+            if e.bb.Enabled ~= showBB then e.bb.Enabled = showBB end
+        end
+    end
 end
 
 task.spawn(function()
+    local lastScan = 0
     while running do
-        task.wait(1)
-        pcall(scanNPCs)
+        task.wait(PERF.ESPUpdateInterval)
+        if not running then break end
+        pcall(validateESP)
+        if npcScanDue or os.clock() - lastScan >= PERF.NPCRescanInterval then
+            npcScanDue = false
+            lastScan = os.clock()
+            pcall(scanNPCs)
+        end
+        pcall(updateESPVisibility)
     end
 end)
 
-Workspace.DescendantAdded:Connect(function(inst)
-    if not running then return end
+-- NPC baru: cukup bereaksi pada Humanoid yang baru muncul
+table.insert(connections, Workspace.DescendantAdded:Connect(function(inst)
+    if not running or not inst:IsA("Humanoid") then return end
+    if not (enabled.Police or enabled.Guard or enabled.Civilian) then return end
     task.delay(0.3, function()
         if not running or not inst.Parent then return end
-        local model = getNPCModel(inst)
-        if not model then return end
-        local kind = getNPCType(model)
-        if kind and enabled[kind] then pcall(addHL, model, kind) end
+        local model = inst.Parent
+        if model:IsA("Model") then trackNPC(model) end
     end)
-end)
+end))
 
 local function clearAll()
     lootRetryRunning = false
@@ -326,6 +488,9 @@ end
 if type(getgenv) == "function" then
     getgenv().CrimHubStop = function()
         running = false
+        for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+        table.clear(connections)
+        pcall(setFPSBoost, false)
         pcall(clearAll)
         local playerGui = LP:FindFirstChildOfClass("PlayerGui")
         if playerGui and playerGui:FindFirstChild("CrimHubV38") then
@@ -585,6 +750,29 @@ local buttons = {}
 local labelsList = {}
 local themeBtns = {}
 
+local fpsBtn, fpsThemeRef
+local function refreshFPSBtn()
+    if not fpsBtn then return end
+    fpsBtn:SetAttribute("Active", fpsOn)
+    fpsBtn.Text = (fpsOn and "● " or "○ ") .. "FPS Boost"
+    if fpsOn then
+        if not fpsThemeRef or not table.find(ThemeElements, fpsThemeRef) then
+            fpsThemeRef = { obj = fpsBtn, prop = "TextColor3" }
+            table.insert(ThemeElements, fpsThemeRef)
+        end
+        fpsBtn.TextColor3 = CurrentAccent
+        fpsBtn.BackgroundColor3 = COLORS.Panel
+    else
+        if fpsThemeRef then
+            local i = table.find(ThemeElements, fpsThemeRef)
+            if i then table.remove(ThemeElements, i) end
+            fpsThemeRef = nil
+        end
+        fpsBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+        fpsBtn.BackgroundColor3 = COLORS.Button
+    end
+end
+
 local function makeLabel(text, key)
     local l = Instance.new("TextLabel")
     l.Size = UDim2.new(1, 0, 0, 20)
@@ -652,6 +840,7 @@ local function makeToggle(labelBase, kind, onToggle, isFly)
         end
         if onToggle then onToggle(enabled[kind]) end
         if kind == "Loot" then setLoot(enabled[kind]) elseif not enabled[kind] then removeKind(kind) end
+        if enabled[kind] and kind ~= "Loot" then npcScanDue = true end
     end)
     
     b:SetAttribute("LangKey", kind)
@@ -680,6 +869,7 @@ local function UpdateLanguage()
     local bNoclip = buttons["NoClip"].btn
     if bNoclip:GetAttribute("Active") then bNoclip.Text = "● " .. L.NoClip else bNoclip.Text = "○ " .. L.NoClip end
     
+    refreshFPSBtn()
     local themeKeys = {"Gold", "Red", "Blue", "Green", "Rainbow"}
     for i, theme in ipairs(themeBtns) do
         theme.btn.Text = L[themeKeys[i]]
@@ -697,6 +887,11 @@ makeToggle("Guard ESP", "Guard")
 makeToggle("Civilian ESP", "Civilian")
 
 makeLabel(LOCALES[CurrentLang].Settings, "Settings")
+fpsBtn = makeBtn("FPS Boost", nil, function()
+    setFPSBoost(not fpsOn)
+    refreshFPSBtn()
+end)
+refreshFPSBtn()
 makeBtn(LOCALES[CurrentLang].Clear, "Clear", function()
     enabled.Fly = false
     enabled.NoClip = false
@@ -785,4 +980,8 @@ UIS.InputBegan:Connect(function(input, gpe)
     if input.KeyCode == Enum.KeyCode.V then unlocked = not unlocked end
 end)
 
-print("🚔 Criminal Hub v38 loaded (ESP scanner and UI initialization fixed)")
+-- Auto-ON: FPS Boost aktif otomatis saat script dijalankan
+if PERF.FPSBoost then setFPSBoost(true) end
+refreshFPSBtn()
+
+print("🚔 Criminal Hub v38 loaded | FPS Boost: " .. (fpsOn and "ON" or "OFF") .. " | ESP optimized")
