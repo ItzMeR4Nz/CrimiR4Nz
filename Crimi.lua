@@ -84,7 +84,12 @@ local COLORS = {
 }
 local CurrentAccent = Color3.fromRGB(255, 215, 0)
 local IsRainbow = false
-local FOLDERS = { Police = "Police", Guard = "Guards", Civilian = "Npcs" }
+-- NPC folders may be nested or streamed in later.
+local FOLDER_ALIASES = {
+    Police = { police = true, cops = true, officers = true },
+    Guard = { guards = true, guard = true, security = true, securityguards = true },
+    Civilian = { npcs = true, npc = true, civilians = true, civilian = true, citizens = true }
+}
 local enabled = { Loot = false, Police = false, Guard = false, Civilian = false, Fly = false, NoClip = false }
 local active = {}; local lootMarks = {}  
 
@@ -112,11 +117,17 @@ sg.Parent = pg
 
 local function addHL(obj, kind)
     local hl = obj:FindFirstChild("CrimESP")
-    if not hl then
-        hl = Instance.new("Highlight"); hl.Name = "CrimESP"; hl.Adornee = obj
-        hl.FillTransparency = 0.5; hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop; hl.Parent = obj
+    if not hl or not hl.Parent then
+        hl = Instance.new("Highlight")
+        hl.Name = "CrimESP"
+        hl.FillTransparency = 0.5
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = obj
     end
-    hl.FillColor = COLORS[kind]; hl.OutlineColor = COLORS[kind]
+    hl.Adornee = obj
+    hl.Enabled = true
+    hl.FillColor = COLORS[kind]
+    hl.OutlineColor = COLORS[kind]
     active[obj] = { hl = hl, kind = kind }
 end
 local function removeKind(kind)
@@ -227,52 +238,68 @@ local function setLoot(on)
                 end
             end)
         end)
-        task.spawn(function()
-            while running and lootRetryRunning and enabled.Loot do
-                task.wait(2)
-                if running and lootRetryRunning and enabled.Loot then
-                    pcall(scanLoot)
-                end
-            end
-        end)
-    else
-        lootRetryRunning = false
-        for obj, rec in pairs(lootMarks) do
+        -- Reconcile NPC ESP continuously: supports nested folders, late spawns,
+-- and StreamingEnabled. The parent-folder ancestry selects the ESP type.
+local function getNPCModel(inst)
+    local node = inst
+    while node and node ~= Workspace do
+        if node:IsA("Model") then
+            local hum = node:FindFirstChildOfClass("Humanoid") or node:FindFirstChildWhichIsA("Humanoid", true)
+            if hum then return node end
+        end
+        node = node.Parent
+    end
+    return nil
+end
+
+local function getNPCType(model)
+    local node = model.Parent
+    while node and node ~= Workspace do
+        local key = string.lower((node.Name:gsub("[%s_%-]", "")))
+        for kind, aliases in pairs(FOLDER_ALIASES) do
+            if aliases[key] then return kind end
+        end
+        node = node.Parent
+    end
+    return nil
+end
+
+local function scanNPCs()
+    for _, inst in ipairs(Workspace:GetDescendants()) do
+        if not running then return end
+        local model = getNPCModel(inst)
+        if model then
+            local kind = getNPCType(model)
+            if kind and enabled[kind] then pcall(addHL, model, kind) end
+        end
+    end
+    for model, rec in pairs(active) do
+        if not model.Parent or not model:IsDescendantOf(Workspace)
+            or not enabled[rec.kind] or getNPCType(model) ~= rec.kind then
             if rec.hl then rec.hl:Destroy() end
-            if rec.bb then rec.bb:Destroy() end
-            lootMarks[obj] = nil
+            active[model] = nil
         end
     end
 end
-local function clearAll()
-    lootRetryRunning = false
-    for obj, rec in pairs(active) do if rec.hl then rec.hl:Destroy() end; active[obj] = nil end
-    for _, v in ipairs(Workspace:GetDescendants()) do if v.Name == "CrimESP" then v:Destroy() end end
-    setLoot(false)
-end
-getgenv().CrimHubStop = function() running = false; pcall(clearAll) end
 
 task.spawn(function()
-    while running and task.wait(0.5) do
-        pcall(function()
-            for obj, rec in pairs(lootMarks) do
-                if not obj:IsDescendantOf(Workspace) or inCharacter(obj) then
-                    if rec.hl then rec.hl:Destroy() end; if rec.bb then rec.bb:Destroy() end; lootMarks[obj] = nil
-                end
-            end
-            for kind, fname in pairs(FOLDERS) do
-                if enabled[kind] then
-                    local f = Workspace:FindFirstChild(fname)
-                    if f then
-                        for _, npc in ipairs(f:GetChildren()) do
-                            if npc:IsA("Model") and npc:FindFirstChild("Humanoid") then addHL(npc, kind) end
-                        end
-                    end
-                end
-            end
-        end)
+    while running do
+        task.wait(1)
+        pcall(scanNPCs)
     end
 end)
+
+Workspace.DescendantAdded:Connect(function(inst)
+    if not running then return end
+    task.delay(0.25, function()
+        if not running or not inst.Parent then return end
+        local model = getNPCModel(inst)
+        if not model then return end
+        local kind = getNPCType(model)
+        if kind and enabled[kind] then pcall(addHL, model, kind) end
+    end)
+end)
+
 
 local flyConnection = nil
 local flyBodyVel = nil
